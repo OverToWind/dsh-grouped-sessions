@@ -1,0 +1,3 @@
+- insert:
+    - id: grouped-sessions
+      name: 'dsh-grouped-sessions'
