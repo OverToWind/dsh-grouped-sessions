@@ -53,6 +53,7 @@ window.__ModuleLoader__.load({
       'tree.ungrouped': 'Ungrouped',
       'tree.noGroup': 'No group yet. Use + to create one.',
       'tree.groupMenu': 'Group actions',
+      'tree.ungroupedMenu': 'Ungrouped actions',
       'tree.sessionMenu': 'Session actions',
       'tree.toggleGroup': 'Toggle group {name}',
       'tree.toggleWorkspace': 'Toggle workspace {name}',
@@ -99,6 +100,7 @@ window.__ModuleLoader__.load({
       'tree.ungrouped': '未分组',
       'tree.noGroup': '还没有分组，点 ＋ 新建一个。',
       'tree.groupMenu': '分组操作',
+      'tree.ungroupedMenu': '未分组操作',
       'tree.sessionMenu': '会话操作',
       'tree.toggleGroup': '展开或收起分组「{name}」',
       'tree.toggleWorkspace': '展开或收起工作区「{name}」',
@@ -318,15 +320,23 @@ window.__ModuleLoader__.load({
      * of the default this field exists for.
      */
     function readView() {
-      const empty = { collapsedWorkspaces: [], expandedGroups: [], collapsedUngrouped: [] }
+      const empty = { collapsedWorkspaces: [], expandedGroups: [], collapsedUngrouped: [], ungroupedOrder: {} }
       try {
         const raw = window.localStorage.getItem(VIEW_KEY)
         if (raw === null) return empty
         const parsed = JSON.parse(raw)
+        const storedOrder = parsed !== null && typeof parsed.ungroupedOrder === 'object' && parsed.ungroupedOrder !== null
+          ? parsed.ungroupedOrder
+          : {}
+        const ungroupedOrder = {}
+        for (const [workspaceId, value] of Object.entries(storedOrder)) {
+          if (typeof value === 'number' && Number.isFinite(value)) ungroupedOrder[workspaceId] = value
+        }
         return {
           collapsedWorkspaces: Array.isArray(parsed.collapsedWorkspaces) ? parsed.collapsedWorkspaces : [],
           expandedGroups: Array.isArray(parsed.expandedGroups) ? parsed.expandedGroups : [],
           collapsedUngrouped: Array.isArray(parsed.collapsedUngrouped) ? parsed.collapsedUngrouped : [],
+          ungroupedOrder,
         }
       } catch (error) {
         return empty
@@ -562,14 +572,22 @@ window.__ModuleLoader__.load({
           const groupsNext = previous.expandedGroups.filter(id => liveGroups.has(id))
           const workspacesNext = previous.collapsedWorkspaces.filter(id => liveWorkspaces.has(id))
           const ungroupedNext = previous.collapsedUngrouped.filter(id => liveWorkspaces.has(id.slice(UNGROUPED_PREFIX.length)))
+          const orderNext = {}
+          let droppedOrder = false
+          for (const [workspaceId, value] of Object.entries(previous.ungroupedOrder)) {
+            if (liveWorkspaces.has(workspaceId)) orderNext[workspaceId] = value
+            else droppedOrder = true
+          }
           if (groupsNext.length === previous.expandedGroups.length
             && workspacesNext.length === previous.collapsedWorkspaces.length
-            && ungroupedNext.length === previous.collapsedUngrouped.length) return previous
+            && ungroupedNext.length === previous.collapsedUngrouped.length
+            && !droppedOrder) return previous
           return {
             ...previous,
             expandedGroups: groupsNext,
             collapsedWorkspaces: workspacesNext,
             collapsedUngrouped: ungroupedNext,
+            ungroupedOrder: orderNext,
           }
         })
       }, [groups, workspaces])
@@ -684,6 +702,26 @@ window.__ModuleLoader__.load({
         setOpenMenu(null)
         return run({ action: 'move', groupId, direction })
       }, [run])
+
+      /**
+       * Move the `ungrouped` bucket one slot among its workspace's groups.
+       *
+       * The bucket is derived from sessions rather than stored, so it has no
+       * `order` of its own; its slot is the number of groups shown above it,
+       * kept in the view state (it is a way of looking at the list, not data).
+       */
+      const moveUngrouped = (workspaceId, direction, index, count) => {
+        const next = direction === 'up' ? index - 1 : index + 1
+        if (next < 0 || next > count) {
+          setOpenMenu(null)
+          return
+        }
+        setOpenMenu(null)
+        setView(previous => ({
+          ...previous,
+          ungroupedOrder: { ...previous.ungroupedOrder, [workspaceId]: next },
+        }))
+      }
 
       /* ---------------------------------------------------------- drag and drop */
 
@@ -959,12 +997,15 @@ window.__ModuleLoader__.load({
         )
       }
 
-      const renderUngrouped = (workspace, ungroupedRows) => {
+      const renderUngrouped = (workspace, ungroupedRows, position, groupCount) => {
         const groupKey = UNGROUPED_PREFIX + workspace.workspaceId
         const isDrop = dropTarget === groupKey
         /* The bucket is where unfiled sessions live, so it starts open while
            groups the user created start closed. */
         const collapsed = view.collapsedUngrouped.includes(groupKey)
+        const menuKey = 'ungrouped:' + workspace.workspaceId
+        const canMoveUp = position > 0
+        const canMoveDown = position < groupCount
         return h('div', {
           key: groupKey,
           className: 'sg-group' + (isDrop ? ' sg-group-drop' : ''),
@@ -981,21 +1022,62 @@ window.__ModuleLoader__.load({
           },
           onDrop: event => void dropOn(event, workspace.workspaceId, ''),
         },
-          h('button', {
-            type: 'button',
-            className: 'sg-group-row',
-            'aria-expanded': !collapsed,
-            'aria-label': t('tree.toggleGroup', { name: t('tree.ungrouped') }),
-            onClick: () => setView(previous => ({
-              ...previous,
-              collapsedUngrouped: previous.collapsedUngrouped.includes(groupKey)
-                ? previous.collapsedUngrouped.filter(id => id !== groupKey)
-                : previous.collapsedUngrouped.concat(groupKey),
-            })),
-          },
-            h(Chevron, { open: !collapsed }),
-            h('span', { className: 'sg-group-name' }, t('tree.ungrouped')),
-            h('span', { className: 'sg-group-count' }, String(ungroupedRows.length)),
+          h('div', { className: 'sg-menu-wrap' },
+            h('div', { className: 'sg-group-main' },
+              h('button', {
+                type: 'button',
+                className: 'sg-group-row',
+                'aria-expanded': !collapsed,
+                'aria-label': t('tree.toggleGroup', { name: t('tree.ungrouped') }),
+                onClick: () => setView(previous => ({
+                  ...previous,
+                  collapsedUngrouped: previous.collapsedUngrouped.includes(groupKey)
+                    ? previous.collapsedUngrouped.filter(id => id !== groupKey)
+                    : previous.collapsedUngrouped.concat(groupKey),
+                })),
+              },
+                h(Chevron, { open: !collapsed }),
+                h('span', { className: 'sg-group-name' }, t('tree.ungrouped')),
+                h('span', { className: 'sg-group-count' }, String(ungroupedRows.length)),
+              ),
+              h('button', {
+                type: 'button',
+                className: 'sg-icon-btn',
+                'aria-label': t('tree.ungroupedMenu'),
+                title: t('tree.ungroupedMenu'),
+                'aria-haspopup': 'true',
+                'aria-expanded': openMenu === menuKey,
+                onPointerDown: event => event.stopPropagation(),
+                onClick: event => {
+                  event.stopPropagation()
+                  setOpenMenu(previous => (previous === menuKey ? null : menuKey))
+                },
+              }, DotsIcon()),
+            ),
+            openMenu === menuKey
+              ? h('div', { className: 'sg-menu', role: 'menu', 'aria-label': t('tree.ungroupedMenu'), onKeyDown: menuKeyDown },
+                  h('button', {
+                    type: 'button',
+                    role: 'menuitem',
+                    className: 'sg-menu-item',
+                    disabled: !canMoveUp,
+                    onClick: event => {
+                      event.stopPropagation()
+                      moveUngrouped(workspace.workspaceId, 'up', position, groupCount)
+                    },
+                  }, h('span', { className: 'sg-check', 'aria-hidden': 'true' }), h('span', null, t('tree.moveUp'))),
+                  h('button', {
+                    type: 'button',
+                    role: 'menuitem',
+                    className: 'sg-menu-item',
+                    disabled: !canMoveDown,
+                    onClick: event => {
+                      event.stopPropagation()
+                      moveUngrouped(workspace.workspaceId, 'down', position, groupCount)
+                    },
+                  }, h('span', { className: 'sg-check', 'aria-hidden': 'true' }), h('span', null, t('tree.moveDown'))),
+                )
+              : null,
           ),
           collapsed ? null : h('div', { className: 'sg-rows' },
             ungroupedRows.length === 0
@@ -1019,6 +1101,12 @@ window.__ModuleLoader__.load({
           for (const id of members) filed.delete(String(id))
         }
         const ungroupedRows = rows.filter(row => filed.has(row.id))
+        /* Where the bucket sits among the groups: a stored slot, clamped so a
+           group being deleted elsewhere can never push it out of the list. */
+        const storedPosition = view.ungroupedOrder[workspace.workspaceId]
+        const ungroupedPosition = typeof storedPosition === 'number'
+          ? Math.max(0, Math.min(workspaceGroups.length, storedPosition))
+          : workspaceGroups.length
         const total = rows.length
         return h('div', { key: workspace.workspaceId, className: 'sg-ws' },
           h('div', { className: 'sg-menu-wrap' },
@@ -1093,8 +1181,9 @@ window.__ModuleLoader__.load({
             workspaceGroups.length === 0 && creatingFor !== workspace.workspaceId
               ? h('div', { className: 'sg-empty' }, t('tree.noGroup'))
               : null,
-            workspaceGroups.map(group => renderGroup(workspace.workspaceId, group, rows, workspaceGroups)),
-            renderUngrouped(workspace, ungroupedRows),
+            workspaceGroups.slice(0, ungroupedPosition).map(group => renderGroup(workspace.workspaceId, group, rows, workspaceGroups)),
+            renderUngrouped(workspace, ungroupedRows, ungroupedPosition, workspaceGroups.length),
+            workspaceGroups.slice(ungroupedPosition).map(group => renderGroup(workspace.workspaceId, group, rows, workspaceGroups)),
           ),
         )
       }

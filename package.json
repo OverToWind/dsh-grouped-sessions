@@ -1,7 +1,7 @@
 {
   "name": "dsh-grouped-sessions",
-  "version": "1.1.0",
-  "description": "Turn the DSH sidebar into a workspace → group → session tree: file sessions into groups, reorder the groups you use most to the top, and open a session from its row.",
+  "version": "1.2.0",
+  "description": "Turn the DSH sidebar into a workspace → group → session tree: file sessions into groups, reorder the groups (and the ungrouped bucket) the way you work, and open a session from its row.",
   "type": "module",
   "license": "MIT",
   "repository": {

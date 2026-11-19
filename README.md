@@ -26,21 +26,25 @@ pick a session. Ships as a Cordis bundle plugin for the DSH web UI.
   an empty name shows an inline error instead of discarding what you typed. `Move up` /
   `Move down` shift a group past its neighbour in the same workspace, so the groups you
   use most can sit at the top; the move lands at the first or last position and disables
-  itself there.
+  itself there. The `Ungrouped` row has its own `⋯` menu with the same two moves (it has no
+  name or record to rename or delete), so the bucket can sit above or below the groups.
 - **Live row metadata** — title, running dot and relative last-activity time per session,
   and a per-group count that follows the rows actually shown.
 - **Filter** — the header search filters every workspace at once; a query matching
   nothing shows a single "no matches" line instead of an empty state under each group.
 - **Groups start collapsed** — a group you created is closed until you open it, so a
   workspace opens as a short list of group names; `Ungrouped` starts open because it is
-  where unfiled sessions land. Opening a group, collapsing a workspace and closing the
-  `Ungrouped` bucket are all remembered in `localStorage` (`dsh-session-groups.sidebar`),
-  and filing a session into a closed group opens that group so the row does not vanish.
+  where unfiled sessions land. Opening a group, collapsing a workspace, closing the
+  `Ungrouped` bucket and where that bucket sits are all remembered in `localStorage`
+  (`dsh-session-groups.sidebar`), and filing a session into a closed group opens that group
+  so the row does not vanish.
 - **Localized** — every string follows the shell language (en / zh) and a language change
   applies without a reload.
 
 The agent can do the same work through the `session_groups` tool (`list`, `create`,
-`rename`, `delete`, `assign`), so grouping also works from a prompt.
+`rename`, `reorder`, `move`, `delete`, `assign`), so grouping also works from a prompt.
+The bucket is a rendering detail rather than a stored record, so its slot stays a local
+preference and is not exposed to the tool.
 
 ## Install
 

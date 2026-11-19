@@ -502,6 +502,39 @@ findAll(tree, node => node.type === 'button' && node.props?.['aria-label'] === '
   .props.onClick({ stopPropagation() {} })
 tree = rerender()
 
+/* ------------------------------------------------------ reordering the bucket */
+// The bucket has no stored order of its own: its slot is remembered in the view.
+const bucketToggles = findAll(tree, node => node.type === 'button' && node.props?.['aria-label'] === 'Ungrouped actions')
+console.log('ungrouped menu toggles:', bucketToggles.length)
+if (bucketToggles.length === 0) throw new Error('the ungrouped bucket has no menu')
+const titlesInOrder = candidate => findAll(candidate, node => node.props?.className === 'sg-group-name').map(node => textOf(node).join(''))
+console.log('order before bucket move:', JSON.stringify(titlesInOrder(tree)))
+bucketToggles[0].props.onClick({ stopPropagation() {} })
+tree = rerender()
+const bucketItems = findAll(tree, node => node.props?.role === 'menuitem')
+const bucketUp = bucketItems.find(item => textOf(item).join('') === 'Move up')
+const bucketDown = bucketItems.find(item => textOf(item).join('') === 'Move down')
+if (bucketUp === undefined || bucketDown === undefined) throw new Error('the bucket menu is missing the reorder actions')
+if (bucketUp.props.disabled === true) throw new Error('the bucket sits last and should be able to move up')
+if (bucketDown.props.disabled !== true) throw new Error('the last slot cannot move down and must say so')
+bucketUp.props.onClick({ stopPropagation() {} })
+tree = await flush()
+const movedOrder = titlesInOrder(tree)
+console.log('order after bucket move:', JSON.stringify(movedOrder))
+if (movedOrder.join('|') !== 'Release prep|Ungrouped|Docs|Ungrouped') {
+  throw new Error('the bucket did not move between the two groups: ' + JSON.stringify(movedOrder))
+}
+const storedBucket = JSON.parse(window.localStorage.store.get('dsh-session-groups.sidebar') ?? '{}')
+if (JSON.stringify(storedBucket.ungroupedOrder ?? {}) !== '{}') {
+  throw new Error('unexpected bucket slot before the write pass: ' + JSON.stringify(storedBucket.ungroupedOrder))
+}
+// The effect that persists the view is queued by the render carrying the new
+// state, so it lands one pass later.
+tree = await flush()
+const storedBucketAfter = JSON.parse(window.localStorage.store.get('dsh-session-groups.sidebar') ?? '{}')
+console.log('stored ungroupedOrder:', JSON.stringify(storedBucketAfter.ungroupedOrder ?? null))
+if (storedBucketAfter.ungroupedOrder?.['ws-1'] !== 1) throw new Error('the bucket slot was not stored')
+
 /* -------------------------------------------------------------- opening a session */
 
 tree = await settle()
