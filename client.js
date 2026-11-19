@@ -33,6 +33,13 @@ window.__ModuleLoader__.load({
     /** Where this plugin keeps its own view state (expanded rows, filter). */
     const VIEW_KEY = 'dsh-session-groups.sidebar'
 
+    /**
+     * Pseudo-group id prefix for the "Ungrouped" bucket of one workspace. The
+     * bucket shares the collapse map with real groups, so it needs a key that
+     * can never collide with a group id (those are `group-<uuid>`).
+     */
+    const UNGROUPED_PREFIX = 'ungrouped:'
+
     /* ------------------------------------------------------------------ locale */
 
     const EN = {
@@ -52,6 +59,8 @@ window.__ModuleLoader__.load({
       'tree.moveTo': 'Move to group',
       'tree.moveOut': 'Remove from group',
       'tree.renameGroup': 'Rename group',
+      'tree.moveUp': 'Move up',
+      'tree.moveDown': 'Move down',
       'tree.deleteGroup': 'Delete group',
       'tree.dropGroup': 'Drop to file here',
       'tree.dropUngrouped': 'Drop to unfiled',
@@ -67,6 +76,7 @@ window.__ModuleLoader__.load({
       'error.missing-session': 'That session no longer exists.',
       'error.unknown-group': 'That group no longer exists.',
       'error.unknown-action': 'This change is not supported.',
+      'error.invalid-direction': 'That move is not supported.',
       'error.body-too-large': 'The change is too large.',
       'error.invalid-body': 'The change could not be read.',
       'error.failed': 'The change was rejected.',
@@ -95,6 +105,8 @@ window.__ModuleLoader__.load({
       'tree.moveTo': '移动到分组',
       'tree.moveOut': '移出分组',
       'tree.renameGroup': '重命名分组',
+      'tree.moveUp': '上移',
+      'tree.moveDown': '下移',
       'tree.deleteGroup': '删除分组',
       'tree.dropGroup': '松开即归入该分组',
       'tree.dropUngrouped': '松开即移出分组',
@@ -110,6 +122,7 @@ window.__ModuleLoader__.load({
       'error.missing-session': '这个会话已不存在。',
       'error.unknown-group': '这个分组已不存在。',
       'error.unknown-action': '不支持这个改动。',
+      'error.invalid-direction': '不支持这个移动方向。',
       'error.body-too-large': '改动内容过大。',
       'error.invalid-body': '改动内容无法读取。',
       'error.failed': '改动被拒绝。',
@@ -295,18 +308,28 @@ window.__ModuleLoader__.load({
 
     /* ------------------------------------------------------------------- helpers */
 
-    /** Persisted view state: which workspaces/groups are expanded. */
+    /**
+     * Persisted view state.
+     *
+     * Groups are closed by default, so the stored side is the list of groups the
+     * user opened (`expandedGroups`), not the list of closed ones. The older
+     * `collapsedGroups` field is deliberately ignored: a stored "not collapsed"
+     * set would have meant every group opening on upgrade, which is the opposite
+     * of the default this field exists for.
+     */
     function readView() {
+      const empty = { collapsedWorkspaces: [], expandedGroups: [], collapsedUngrouped: [] }
       try {
         const raw = window.localStorage.getItem(VIEW_KEY)
-        if (raw === null) return { collapsedWorkspaces: [], collapsedGroups: [] }
+        if (raw === null) return empty
         const parsed = JSON.parse(raw)
         return {
           collapsedWorkspaces: Array.isArray(parsed.collapsedWorkspaces) ? parsed.collapsedWorkspaces : [],
-          collapsedGroups: Array.isArray(parsed.collapsedGroups) ? parsed.collapsedGroups : [],
+          expandedGroups: Array.isArray(parsed.expandedGroups) ? parsed.expandedGroups : [],
+          collapsedUngrouped: Array.isArray(parsed.collapsedUngrouped) ? parsed.collapsedUngrouped : [],
         }
       } catch (error) {
-        return { collapsedWorkspaces: [], collapsedGroups: [] }
+        return empty
       }
     }
 
@@ -531,16 +554,23 @@ window.__ModuleLoader__.load({
       const byId = sessionsSnapshot.byId !== null && typeof sessionsSnapshot.byId === 'object' ? sessionsSnapshot.byId : {}
       const currentId = typeof sessionsSnapshot.current === 'string' ? sessionsSnapshot.current : null
 
-      /* Drop collapse flags of groups/workspaces that no longer exist. */
+      /* Drop remembered expansion of groups/workspaces that no longer exist. */
       React.useEffect(() => {
         const liveGroups = new Set(groups.map(group => group.id))
         const liveWorkspaces = new Set(workspaces.map(workspace => workspace.workspaceId))
         setView(previous => {
-          const groupsNext = previous.collapsedGroups.filter(id => liveGroups.has(id) || id.startsWith('ungrouped:'))
+          const groupsNext = previous.expandedGroups.filter(id => liveGroups.has(id))
           const workspacesNext = previous.collapsedWorkspaces.filter(id => liveWorkspaces.has(id))
-          if (groupsNext.length === previous.collapsedGroups.length
-            && workspacesNext.length === previous.collapsedWorkspaces.length) return previous
-          return { ...previous, collapsedGroups: groupsNext, collapsedWorkspaces: workspacesNext }
+          const ungroupedNext = previous.collapsedUngrouped.filter(id => liveWorkspaces.has(id.slice(UNGROUPED_PREFIX.length)))
+          if (groupsNext.length === previous.expandedGroups.length
+            && workspacesNext.length === previous.collapsedWorkspaces.length
+            && ungroupedNext.length === previous.collapsedUngrouped.length) return previous
+          return {
+            ...previous,
+            expandedGroups: groupsNext,
+            collapsedWorkspaces: workspacesNext,
+            collapsedUngrouped: ungroupedNext,
+          }
         })
       }, [groups, workspaces])
 
@@ -594,10 +624,11 @@ window.__ModuleLoader__.load({
           workspaceId,
           groupId: target,
         })
-        if (ok && target !== '') setView(previous => ({
-          ...previous,
-          collapsedGroups: previous.collapsedGroups.filter(id => id !== target),
-        }))
+        /* Groups start closed, so reveal the one that just received the session —
+           otherwise filing looks like the row simply disappeared. */
+        if (ok && target !== '') setView(previous => (previous.expandedGroups.includes(target)
+          ? previous
+          : { ...previous, expandedGroups: previous.expandedGroups.concat(target) }))
         return ok
       }, [run])
 
@@ -643,10 +674,16 @@ window.__ModuleLoader__.load({
 
       const toggleGroup = groupId => setView(previous => ({
         ...previous,
-        collapsedGroups: previous.collapsedGroups.includes(groupId)
-          ? previous.collapsedGroups.filter(id => id !== groupId)
-          : previous.collapsedGroups.concat(groupId),
+        expandedGroups: previous.expandedGroups.includes(groupId)
+          ? previous.expandedGroups.filter(id => id !== groupId)
+          : previous.expandedGroups.concat(groupId),
       }))
+
+      /** Move one group one step up or down among its workspace's groups. */
+      const moveGroup = React.useCallback(async (groupId, direction) => {
+        setOpenMenu(null)
+        return run({ action: 'move', groupId, direction })
+      }, [run])
 
       /* ---------------------------------------------------------- drag and drop */
 
@@ -793,9 +830,12 @@ window.__ModuleLoader__.load({
         )
       }
 
-      const renderGroup = (workspaceId, group, workspaceRows) => {
+      const renderGroup = (workspaceId, group, workspaceRows, siblings) => {
         const rows = sessionsOfWorkspaceByGroup(workspaceRows, group)
-        const collapsed = view.collapsedGroups.includes(group.id)
+        const collapsed = !view.expandedGroups.includes(group.id)
+        const position = siblings.findIndex(item => item.id === group.id)
+        const canMoveUp = position > 0
+        const canMoveDown = position >= 0 && position < siblings.length - 1
         const isDrop = dropTarget === group.id
         return h('div', {
           key: group.id,
@@ -868,6 +908,26 @@ window.__ModuleLoader__.load({
                         type: 'button',
                         role: 'menuitem',
                         className: 'sg-menu-item',
+                        disabled: busy || !canMoveUp,
+                        onClick: event => {
+                          event.stopPropagation()
+                          void moveGroup(group.id, 'up')
+                        },
+                      }, h('span', { className: 'sg-check', 'aria-hidden': 'true' }), h('span', null, t('tree.moveUp'))),
+                      h('button', {
+                        type: 'button',
+                        role: 'menuitem',
+                        className: 'sg-menu-item',
+                        disabled: busy || !canMoveDown,
+                        onClick: event => {
+                          event.stopPropagation()
+                          void moveGroup(group.id, 'down')
+                        },
+                      }, h('span', { className: 'sg-check', 'aria-hidden': 'true' }), h('span', null, t('tree.moveDown'))),
+                      h('button', {
+                        type: 'button',
+                        role: 'menuitem',
+                        className: 'sg-menu-item',
                         disabled: busy,
                         onClick: event => {
                           event.stopPropagation()
@@ -900,20 +960,23 @@ window.__ModuleLoader__.load({
       }
 
       const renderUngrouped = (workspace, ungroupedRows) => {
-        const isDrop = dropTarget === 'ungrouped:' + workspace.workspaceId
-        const collapsed = view.collapsedGroups.includes('ungrouped:' + workspace.workspaceId)
+        const groupKey = UNGROUPED_PREFIX + workspace.workspaceId
+        const isDrop = dropTarget === groupKey
+        /* The bucket is where unfiled sessions live, so it starts open while
+           groups the user created start closed. */
+        const collapsed = view.collapsedUngrouped.includes(groupKey)
         return h('div', {
-          key: 'ungrouped:' + workspace.workspaceId,
+          key: groupKey,
           className: 'sg-group' + (isDrop ? ' sg-group-drop' : ''),
           onDragOver: event => {
             if (!carriesSessionId(event)) return
             event.preventDefault()
-            setDropTarget('ungrouped:' + workspace.workspaceId)
+            setDropTarget(groupKey)
             setDraggingId(previous => previous !== null ? previous : 'dragging')
           },
           onDragLeave: event => {
             if (leftElement(event, event.currentTarget)) {
-              setDropTarget(previous => (previous === 'ungrouped:' + workspace.workspaceId ? null : previous))
+              setDropTarget(previous => (previous === groupKey ? null : previous))
             }
           },
           onDrop: event => void dropOn(event, workspace.workspaceId, ''),
@@ -925,9 +988,9 @@ window.__ModuleLoader__.load({
             'aria-label': t('tree.toggleGroup', { name: t('tree.ungrouped') }),
             onClick: () => setView(previous => ({
               ...previous,
-              collapsedGroups: previous.collapsedGroups.includes('ungrouped:' + workspace.workspaceId)
-                ? previous.collapsedGroups.filter(id => id !== 'ungrouped:' + workspace.workspaceId)
-                : previous.collapsedGroups.concat('ungrouped:' + workspace.workspaceId),
+              collapsedUngrouped: previous.collapsedUngrouped.includes(groupKey)
+                ? previous.collapsedUngrouped.filter(id => id !== groupKey)
+                : previous.collapsedUngrouped.concat(groupKey),
             })),
           },
             h(Chevron, { open: !collapsed }),
@@ -1030,7 +1093,7 @@ window.__ModuleLoader__.load({
             workspaceGroups.length === 0 && creatingFor !== workspace.workspaceId
               ? h('div', { className: 'sg-empty' }, t('tree.noGroup'))
               : null,
-            workspaceGroups.map(group => renderGroup(workspace.workspaceId, group, rows)),
+            workspaceGroups.map(group => renderGroup(workspace.workspaceId, group, rows, workspaceGroups)),
             renderUngrouped(workspace, ungroupedRows),
           ),
         )

@@ -21,15 +21,21 @@ pick a session. Ships as a Cordis bundle plugin for the DSH web UI.
   narrow; dragging is the shortcut. Only the plugin's own drag flavour is accepted, so
   text dragged in from elsewhere is never filed.
 - **Open on click** — clicking a row opens that session in the conversation panel.
-- **Rename and delete** — from the group's `⋯` menu. Deleting a group keeps its sessions:
-  they fall back to `Ungrouped`. Renaming validates before closing the field, so an empty
-  name shows an inline error instead of discarding what you typed.
+- **Rename, delete and reorder** — from the group's `⋯` menu. Deleting a group keeps its
+  sessions: they fall back to `Ungrouped`. Renaming validates before closing the field, so
+  an empty name shows an inline error instead of discarding what you typed. `Move up` /
+  `Move down` shift a group past its neighbour in the same workspace, so the groups you
+  use most can sit at the top; the move lands at the first or last position and disables
+  itself there.
 - **Live row metadata** — title, running dot and relative last-activity time per session,
   and a per-group count that follows the rows actually shown.
 - **Filter** — the header search filters every workspace at once; a query matching
   nothing shows a single "no matches" line instead of an empty state under each group.
-- **Remembers collapse state** — expanded workspaces and groups persist in `localStorage`
-  (`dsh-session-groups.sidebar`).
+- **Groups start collapsed** — a group you created is closed until you open it, so a
+  workspace opens as a short list of group names; `Ungrouped` starts open because it is
+  where unfiled sessions land. Opening a group, collapsing a workspace and closing the
+  `Ungrouped` bucket are all remembered in `localStorage` (`dsh-session-groups.sidebar`),
+  and filing a session into a closed group opens that group so the row does not vanish.
 - **Localized** — every string follows the shell language (en / zh) and a language change
   applies without a reload.
 
@@ -99,14 +105,17 @@ If that file does not exist yet, the Host also reads the pre-rename
 - Assignment is single-valued: a session lives in at most one group.
 - A group's count follows the rows actually shown, so a stale stored id never makes an
   empty group look populated.
-- Host rejections come back as stable codes (`missing-name`, `unknown-group`, …) and are
-  translated in the UI instead of leaking English into a localized sidebar.
+- Host rejections come back as stable codes (`missing-name`, `unknown-group`,
+  `invalid-direction`, …) and are translated in the UI instead of leaking English into a
+  localized sidebar.
+- `order` is per workspace: a move renumbers only that workspace's groups, so the other
+  workspaces keep the way you arranged them.
 
 ## Development
 
 `node scripts/smoke.mjs` loads `client.js` headlessly, swaps a fake official occupant,
-renders the tree and asserts the drag / menu / assign / create paths, locale parity and
-that teardown restores the official component.
+renders the tree and asserts the drag / menu / assign / create / move paths, the default
+collapsed state, locale parity and that teardown restores the official component.
 
 ## License
 

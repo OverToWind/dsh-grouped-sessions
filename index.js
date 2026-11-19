@@ -158,6 +158,23 @@ function applyMutation(groups, body) {
     if (!group.sessionIds.includes(sessionId)) group.sessionIds.push(sessionId)
     return
   }
+  if (action === 'move') {
+    const group = requireGroup(groups, body.groupId)
+    const direction = typeof body.direction === 'string' ? body.direction : ''
+    if (direction !== 'up' && direction !== 'down') throw fail('invalid-direction', 'direction must be up or down')
+    const siblings = groups
+      .filter(item => item.workspaceId === group.workspaceId)
+      .sort((left, right) => left.order - right.order)
+    const from = siblings.indexOf(group)
+    const to = direction === 'up' ? from - 1 : from + 1
+    /* Already at the edge: nothing to swap, and not an error worth a banner. */
+    if (from < 0 || to < 0 || to >= siblings.length) return
+    siblings[from] = siblings[to]
+    siblings[to] = group
+    /* Renumber the siblings so a duplicate order can never stall a later swap. */
+    siblings.forEach((item, index) => { item.order = index })
+    return
+  }
   if (action === 'reorder') {
     const ids = Array.isArray(body.groupIds)
       ? body.groupIds.filter(value => typeof value === 'string')
@@ -291,18 +308,19 @@ export function apply(ctx) {
   if (tools !== undefined && typeof tools.register === 'function') {
     ctx.effect(() => tools.register({
       name: 'session_groups',
-      description: 'List, create, rename and delete session groups, and move a session into or out of a group. The same groups appear in the "Session groups" sidebar panel.',
+      description: 'List, create, rename, reorder and delete session groups, and move a session into or out of a group. The same groups appear in the "Session groups" sidebar panel.',
       parameters: {
         action: {
           type: 'string',
-          enum: ['list', 'create', 'rename', 'delete', 'assign'],
+          enum: ['list', 'create', 'rename', 'delete', 'assign', 'move'],
           required: true,
-          description: 'list reads every group; create/rename/delete change one group; assign moves one session into a group (or out of every group when groupId is empty).',
+          description: 'list reads every group; create/rename/delete change one group; assign moves one session into a group (or out of every group when groupId is empty); move shifts one group one step up or down among its workspace groups.',
         },
         workspaceId: { type: 'string', description: 'Workspace the group belongs to. Required by create, and by assign when groupId is empty.' },
         groupId: { type: 'string', description: 'Target group id, from list.' },
         name: { type: 'string', description: 'Group name, for create and rename.' },
         sessionId: { type: 'string', description: 'Session to move, for assign.' },
+        direction: { type: 'string', enum: ['up', 'down'], description: 'Where to shift the group, for move.' },
       },
       output: {
         schema: {
